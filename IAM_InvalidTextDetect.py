@@ -453,6 +453,9 @@ df_f1_all_melted = df_f1_all_melted.sort_values(by=['resampler', 'classifier', '
 df_f1_all_melted
 
 # %%
+print(f"Mean macro F1 across all models: {np.mean(df_f1_all_melted['macro_f1']):.3f}")
+
+# %%
 ### get current date and time in string format, to be added to file names of written outputs
 date_string = datetime.now().strftime('%Y-%m-%d_%I-%M-%S-%p')
 
@@ -528,6 +531,9 @@ df_mcc_all
 df_mcc_all_melted = pd.melt(df_mcc_all, id_vars=['resampler', 'classifier'], var_name='fold', value_name='mcc')
 df_mcc_all_melted = df_mcc_all_melted.sort_values(by=['resampler', 'classifier', 'fold'], ignore_index=True)
 df_mcc_all_melted
+
+# %%
+print(f"Mean MCC across all models: {np.mean(df_mcc_all_melted['mcc']):.3f}")
 
 # %%
 ### write MCC data to CSV in output folder
