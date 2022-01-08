@@ -1,10 +1,6 @@
-# To add a new cell, type '# %%'
-# To add a new markdown cell, type '# %% [markdown]'
-# %%
-from IPython import get_ipython
-
 # %% [markdown]
 # # Detecting Invalid Text Responses
+
 # %% [markdown]
 # This script requires installation of the following:
 # * spaCy
@@ -14,7 +10,6 @@ from IPython import get_ipython
 # * sklearn
 # * imblearn
 # * statsmodels
-# * matplotlib
 
 # %%
 import spacy 
@@ -37,13 +32,13 @@ from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from sklearn.metrics import f1_score, precision_score, recall_score, matthews_corrcoef, classification_report, make_scorer
 from sklearn.model_selection import train_test_split, StratifiedKFold, cross_validate
 from sklearn.naive_bayes import MultinomialNB
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LogisticRegression, SGDClassifier
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.svm import LinearSVC
 
 from imblearn.over_sampling import SMOTE, SVMSMOTE, ADASYN
-from imblearn.pipeline import make_pipeline
+from imblearn.pipeline import make_pipeline, Pipeline
 
 import statsmodels.api as stmod
 from statsmodels.formula.api import ols
@@ -65,12 +60,10 @@ print('Dropped {} cases without any text before pre-processing.'.format(len(raw_
 print('{} texts remaining before pre-processing.'.format(len(text_data['text'])))
 preprocessed_texts_noblanks = len(text_data['text']) # store number of texts after dropping blanks before pre-processing
 
-
 # %%
 ### tokenize raw texts using nlp()
 text_data['tokenized_text'] = [nlp(string) for string in text_data['text']]
 text_data.sample(10, random_state=317)
-
 
 # %%
 ### process tokenized text by removing stop words and punctuation, then lemmatizing tokens
@@ -86,12 +79,10 @@ print('Processed {} texts. Here are the first five: \n'.format(len(text_data['pr
 for each in text_data['processed_tokens'][:5]:
     print(each)
 
-
 # %%
 ### join processed tokens into strings
 text_data['processed_text'] = [' '.join(processed_tokens) for processed_tokens in text_data['processed_tokens']]
 text_data.sample(5, random_state=317)
-
 
 # %%
 ### remove rows with no text after pre-processing
@@ -100,28 +91,23 @@ text_data = text_data.dropna(subset=['processed_text']) # remove rows with NaN v
 print('Dropped {} cases without any text after pre-processing.'.format(preprocessed_texts_noblanks-len(text_data['processed_text'])))
 print('{} texts remaining after pre-processing.'.format(len(text_data['processed_text'])))
 
-
 # %%
 ### filter labelled and unlabelled subsets based on whether cases have received labels (either 0 or 1; labelled) or have no labels (blanks; unlabelled)
 labelled_data = text_data[(text_data['human_labelled'] == 0) | (text_data['human_labelled'] == 1)]
 unlabelled_data = text_data[text_data['human_labelled'].isnull()]
 
-
 # %%
 ### view a random sample of cases from the labelled subset
 labelled_data.sample(5, random_state=317)
-
 
 # %%
 ### count number of each class (0 = valid, 1 = invalid) in the labelled subset
 print('Number of labelled texts:', labelled_data['doc_id'].count())
 print(labelled_data['human_labelled'].value_counts())
 
-
 # %%
 ### view a random sample of cases from the unlabelled subset
 unlabelled_data.sample(5, random_state=317)
-
 
 # %%
 ### count number cases in the unlabelled subset
@@ -130,19 +116,21 @@ print('Number of unlabelled texts:', unlabelled_data['doc_id'].count())
 # %% [markdown]
 # ## Split into Training, Validation, and Test Data
 # 
-# Partition annotated subset into further subsets: one for training the model, one for testing the resulting model's performance.
+# Partition labelled subset into further subsets: one for training the model, one for testing the resulting model's performance.
 # 
 
 # %%
-vect = CountVectorizer()
-t_vect = TfidfVectorizer()
+vect = CountVectorizer(ngram_range = (1,1))
+t_vect = TfidfVectorizer(ngram_range = (1,1))
 
+# %%
+vect_unibi = CountVectorizer(ngram_range = (1,2))
+t_vect_unibi = TfidfVectorizer(ngram_range = (1,2))
 
 # %%
 ### select columns from the labelled data, where X is the predictor variable (the processed texts) and y is the outcome variable (whether it is valid or invalid)
 X = labelled_data['processed_text']
 y = labelled_data['human_labelled']
-
 
 # %%
 ### in the labelled data, split off 20% of the cases as the test set (held out for final evaluation)
@@ -150,12 +138,10 @@ X_train_val, X_test, y_train_val, y_test = train_test_split(X, y, test_size=0.2,
 print('Train + Validation Set:\n',y_train_val.value_counts())
 print('Test Set:\n',y_test.value_counts())
 
-
 # %%
 ### set k = 10 for stratified K fold cross-validation
 kfolds = 10
 skf = StratifiedKFold(n_splits=kfolds, shuffle=True, random_state=317)
-
 
 # %%
 ### count the number of cases (and their classes) in each of the stratified k-fold splits (k = 10) of train and validation sets
@@ -177,7 +163,6 @@ for train_index, val_index in skf.split(X_train_val, y_train_val):
 	print('Fold',str(fold_no),'Train: 0=%d, 1=%d, %.1f%%, total=%d // Validation: 0=%d, 1=%d, %.1f%%, total=%d' % (train_0, train_1, train_percent, len(y_train), val_0, val_1, val_percent, len(y_val)))
 	fold_no += 1
 
-
 # %%
 print('Train + Validation Set Size: %d texts.' % (len(y_train_val)))
 print('Mean Train Set Size Across Folds: %.1f texts.' % (np.mean(train_size_list)))
@@ -189,23 +174,31 @@ print('Unlabelled Set Size: %d texts.' % (len(unlabelled_data)))
 # # Helper Functions - Model Validation
 
 # %%
-def train_val_model_labelled(classifier, resampler=None, count=False, print_precision=False, print_recall=False):
+def train_val_model_labelled(classifier, resampler=None, count=False, ngram='uni', print_precision=False, print_recall=False):
     """Train and cross-validate a model, as specified by the arguments provided.
 
     Args:
         classifier (str): Name of classifier to be used in model.
         resampler (str, optional): Name of resampler to be used in model. Defaults to None.
         count (bool, optional): Set whether the vectorizer uses count (True) or TF-IDF (False). Defaults to False.
+        ngram (str, optional): Set whether the vectorizer uses unigrams ('uni') or unigrams and bigrams ('unibi'). Defaults to 'uni'. 
         print_precision (bool, optional): Set whether the output prints precision metrics. Defaults to False.
         print_recall (bool, optional): Set whether the output prints recall metrics. Defaults to False.
 
     Returns:
         cv_results (dict): Training and cross-validation metrics for the specified model.
     """
+    
     if count == True:
-        vectorizer = vect
-    else:
-        vectorizer = t_vect
+        if ngram == 'uni':
+            vectorizer = vect
+        elif ngram == 'unibi':
+            vectorizer = vect_unibi
+    elif count == False:
+        if ngram == 'uni': 
+            vectorizer = t_vect
+        elif ngram == 'unibi':
+            vectorizer = t_vect_unibi
         
     print('Classifier:', classifier, '/', 'Resampler:', resampler, '/', 'Vectorizer:', vectorizer)
 
@@ -258,7 +251,6 @@ sm = SMOTE(k_neighbors=5, random_state=317)
 # %%
 nb = MultinomialNB()
 
-
 # %%
 nb_sm = train_val_model_labelled(nb, sm)
 
@@ -267,7 +259,6 @@ nb_sm = train_val_model_labelled(nb, sm)
 
 # %%
 logreg = LogisticRegression(random_state=317)
-
 
 # %%
 logreg_sm = train_val_model_labelled(logreg, sm)
@@ -278,7 +269,6 @@ logreg_sm = train_val_model_labelled(logreg, sm)
 # %%
 dt = DecisionTreeClassifier(random_state=317)
 
-
 # %%
 dt_sm = train_val_model_labelled(dt, sm)
 
@@ -287,7 +277,6 @@ dt_sm = train_val_model_labelled(dt, sm)
 
 # %%
 rf = RandomForestClassifier(random_state=317)
-
 
 # %%
 rf_sm = train_val_model_labelled(rf, sm)
@@ -298,7 +287,6 @@ rf_sm = train_val_model_labelled(rf, sm)
 # %%
 gb = GradientBoostingClassifier(random_state=317)
 
-
 # %%
 gb_sm = train_val_model_labelled(gb, sm)
 
@@ -308,12 +296,21 @@ gb_sm = train_val_model_labelled(gb, sm)
 # %%
 lsvc = LinearSVC(random_state=317)
 
-
 # %%
 lsvc_sm = train_val_model_labelled(lsvc, sm)
 
 # %% [markdown]
+# ## SMOTE - ElasticNet
+
+# %%
+en = SGDClassifier(loss='log', penalty='elasticnet')
+
+# %%
+en_sm = train_val_model_labelled(en, sm)
+
+# %% [markdown]
 # # SVM-SMOTE
+
 # %% [markdown]
 # Support Vector Machine-SMOTE (SVM-SMOTE) is an extension of SMOTE that "focuses only on the minority class instances lying around the borderline due to the fact that this area is most crucial for establishing the decision boundary" (Nguyen et al., 2011, p. 24). After oversampling at the borderline between the minority class and the majority class, Support Vector Machine (SVM) classifier then is trained to predict new unknown instances.
 
@@ -355,6 +352,12 @@ gb_svmsm = train_val_model_labelled(gb, svmsm)
 
 # %%
 lsvc_svmsm = train_val_model_labelled(lsvc, svmsm)
+
+# %% [markdown]
+# ## SVMSMOTE - ElasticNet
+
+# %%
+en_svmsm = train_val_model_labelled(en, svmsm)
 
 # %% [markdown]
 # # ADASYN
@@ -400,30 +403,33 @@ gb_ad = train_val_model_labelled(gb, ad)
 lsvc_ad = train_val_model_labelled(lsvc, ad)
 
 # %% [markdown]
+# ## ADASYN - ElasticNet
+
+# %%
+en_ad = train_val_model_labelled(en, ad)
+
+# %% [markdown]
 # # Model Validation
 
 # %%
 ### store names of classifiers and resamplers in lists
-classifier_names = ['nb', 'logreg', 'dt', 'rf', 'gb', 'lsvc']
+classifier_names = ['nb', 'logreg', 'dt', 'rf', 'gb', 'lsvc', 'en']
 resampler_names = ['sm', 'svmsm', 'ad']
-
 
 # %%
 ### create lists of macro F1 and MCC scores for each classifier by resampler (SMOTE)
-sm_f1 = [nb_sm['test_f1'], logreg_sm['test_f1'], dt_sm['test_f1'], rf_sm['test_f1'], gb_sm['test_f1'], lsvc_sm['test_f1']]
-sm_mcc = [nb_sm['test_mcc'], logreg_sm['test_mcc'], dt_sm['test_mcc'], rf_sm['test_mcc'], gb_sm['test_mcc'], lsvc_sm['test_mcc']]
-
+sm_f1 = [nb_sm['test_f1'], logreg_sm['test_f1'], dt_sm['test_f1'], rf_sm['test_f1'], gb_sm['test_f1'], lsvc_sm['test_f1'], en_sm['test_f1']]
+sm_mcc = [nb_sm['test_mcc'], logreg_sm['test_mcc'], dt_sm['test_mcc'], rf_sm['test_mcc'], gb_sm['test_mcc'], lsvc_sm['test_mcc'], en_sm['test_mcc']]
 
 # %%
 ### create lists of macro F1 and MCC scores for each classifier by resampler (SVM-SMOTE)
-svmsm_f1 = [nb_svmsm['test_f1'], logreg_svmsm['test_f1'], dt_svmsm['test_f1'], rf_svmsm['test_f1'], gb_svmsm['test_f1'], lsvc_svmsm['test_f1']]
-svmsm_mcc = [nb_svmsm['test_mcc'], logreg_svmsm['test_mcc'], dt_svmsm['test_mcc'], rf_svmsm['test_mcc'], gb_svmsm['test_mcc'], lsvc_svmsm['test_mcc']]
-
+svmsm_f1 = [nb_svmsm['test_f1'], logreg_svmsm['test_f1'], dt_svmsm['test_f1'], rf_svmsm['test_f1'], gb_svmsm['test_f1'], lsvc_svmsm['test_f1'], en_svmsm['test_f1']]
+svmsm_mcc = [nb_svmsm['test_mcc'], logreg_svmsm['test_mcc'], dt_svmsm['test_mcc'], rf_svmsm['test_mcc'], gb_svmsm['test_mcc'], lsvc_svmsm['test_mcc'], en_svmsm['test_mcc']]
 
 # %%
 ### create lists of macro F1 and MCC scores for each classifier by resampler (ADASYN)
-ad_f1 = [nb_ad['test_f1'], logreg_ad['test_f1'], dt_ad['test_f1'], rf_ad['test_f1'], gb_ad['test_f1'], lsvc_ad['test_f1']]
-ad_mcc = [nb_ad['test_mcc'], logreg_ad['test_mcc'], dt_ad['test_mcc'], rf_ad['test_mcc'], gb_ad['test_mcc'], lsvc_ad['test_mcc']]
+ad_f1 = [nb_ad['test_f1'], logreg_ad['test_f1'], dt_ad['test_f1'], rf_ad['test_f1'], gb_ad['test_f1'], lsvc_ad['test_f1'], en_ad['test_f1']]
+ad_mcc = [nb_ad['test_mcc'], logreg_ad['test_mcc'], dt_ad['test_mcc'], rf_ad['test_mcc'], gb_ad['test_mcc'], lsvc_ad['test_mcc'], en_ad['test_mcc']]
 
 # %% [markdown]
 # ## Model Validation - Macro F1
@@ -435,12 +441,10 @@ dfs = {} # initialize empty dictionary
 for each, df_name in zip(f1_by_resampler, resampler_names): # store macro F1 scores by classifier in dictionary
     dfs[df_name] = pd.DataFrame(each, index=classifier_names) # can access dfs as: dfs['sm'], dfs['svmsm'], dfs['ad']
 
-
 # %%
 ### combine macro F1 dataframes, grouped by classifier and resampler
 df_f1_all = pd.concat(dfs, keys=resampler_names, names=['resampler', 'classifier']).reset_index()
 df_f1_all
-
 
 # %%
 ### pivot dataframe from wide to long format (all macro F1s in the same column, identified by new fold variable)
@@ -448,18 +452,15 @@ df_f1_all_melted = pd.melt(df_f1_all, id_vars=['resampler', 'classifier'], var_n
 df_f1_all_melted = df_f1_all_melted.sort_values(by=['resampler', 'classifier', 'fold'], ignore_index=True)
 df_f1_all_melted
 
-
 # %%
 ### get current date and time in string format, to be added to file names of written outputs
 date_string = datetime.now().strftime('%Y-%m-%d_%I-%M-%S-%p')
-
 
 # %%
 ### write F1 data to CSV in output folder
 output_name = 'f1_all_models'
 file_name = str('output/' + output_name + '_' + date_string + '.csv')
 df_f1_all_melted.to_csv(file_name, index=False)
-
 
 # %%
 ### get macro F1 scores, averaged across folds, and grouped by classifier and resampler
@@ -470,11 +471,9 @@ grouped_data_agg_std = grouped_data['macro_f1'].aggregate(np.std).reset_index().
 grouped_data_agg = pd.merge(grouped_data_agg_mean, grouped_data_agg_std, how='outer', on=['resampler', 'classifier'])
 grouped_data_agg
 
-
 # %%
 ### alternatively, reorder by classifier and resampler
 grouped_data_agg.sort_values(by=['classifier','resampler'], ascending=True)
-
 
 # %%
 ### visualize macro F1 scores by resampler
@@ -484,7 +483,6 @@ output_name = 'f1_by_resampler'
 file_name = str('output/' + output_name + '_' + date_string + '.png')
 plt.savefig(file_name, bbox_inches='tight')
 plt.close()
-
 
 # %%
 ### visualize macro F1 scores by classifier
@@ -500,12 +498,10 @@ plt.close()
 anova_model = ols('macro_f1 ~ C(resampler) + C(classifier) + C(resampler):C(classifier)', data=df_f1_all_melted).fit()
 stmod.stats.anova_lm(anova_model, typ=3)
 
-
 # %%
 ### run post hoc comparisons by resampler if appropriate
 anova_posthoc = pairwise_tukeyhsd(df_f1_all_melted['macro_f1'], df_f1_all_melted['resampler'])
 print(anova_posthoc)
-
 
 # %%
 ### run post hoc comparisons by classifier if appropriate
@@ -522,12 +518,10 @@ dfs = {} # initialize empty dictionary
 for each, df_name in zip(mcc_by_resampler, resampler_names): # store MCC scores by classifier in dictionary
     dfs[df_name] = pd.DataFrame(each, index=classifier_names) # can access dfs as: dfs['sm'], dfs['svmsm'], dfs['ad']
 
-
 # %%
 ### combine MCC dataframes, grouped by classifier and resampler
 df_mcc_all = pd.concat(dfs, keys=resampler_names, names=['resampler', 'classifier']).reset_index()
 df_mcc_all
-
 
 # %%
 ### pivot dataframe from wide to long format (all MCCs in the same column, identified by new fold variable)
@@ -535,13 +529,11 @@ df_mcc_all_melted = pd.melt(df_mcc_all, id_vars=['resampler', 'classifier'], var
 df_mcc_all_melted = df_mcc_all_melted.sort_values(by=['resampler', 'classifier', 'fold'], ignore_index=True)
 df_mcc_all_melted
 
-
 # %%
 ### write MCC data to CSV in output folder
 output_name = 'mcc_all_models'
 file_name = str('output/' + output_name + '_' + date_string + '.csv')
 df_mcc_all_melted.to_csv(file_name, index=False) 
-
 
 # %%
 ### get MCC scores, averaged across folds, and grouped by classifier and resampler
@@ -552,11 +544,9 @@ grouped_data_agg_std = grouped_data['mcc'].aggregate(np.std).reset_index().sort_
 grouped_data_agg = pd.merge(grouped_data_agg_mean, grouped_data_agg_std, how='outer', on=['resampler', 'classifier'])
 grouped_data_agg
 
-
 # %%
 ### alternatively, reorder by classifier and resampler
 grouped_data_agg.sort_values(by=['classifier','resampler'], ascending=True)
-
 
 # %%
 ### visualize MCC scores by resampler
@@ -581,12 +571,10 @@ plt.close()
 anova_model = ols('mcc ~ C(resampler) + C(classifier) + C(resampler):C(classifier)', data=df_mcc_all_melted).fit()
 stmod.stats.anova_lm(anova_model, typ=3)
 
-
 # %%
 ### run post hoc comparisons by resampler if appropriate
 anova_posthoc = pairwise_tukeyhsd(df_mcc_all_melted['mcc'], df_mcc_all_melted['resampler'])
 print(anova_posthoc)
-
 
 # %%
 ### run post hoc comparisons by classifier if appropriate
@@ -628,7 +616,6 @@ def eval_test_model_labelled(cv_results):
 
     return f1_scores, mcc_scores
 
-
 # %%
 ### apply already trained model from cross-validation to the unseen test set
 ### if performance metrics are similar here as they were during cross-validation above, provides some evidence that the model can successfully generalize to unseen data
@@ -644,29 +631,42 @@ X_test_df = pd.DataFrame(X_test).reset_index() # convert it to a dataframe
 X_test_df.columns = ['doc_id', 'processed_text'] # name that dataframe's columns
 X_test_df['doc_id'] += 1 # doc_id is zero-indexed, so add one to match with original dataset
 
-
 # %%
-def pred_test_model_labelled(classifier, resampler=None, count=False):
+def pred_test_model_labelled(classifier, resampler=None, count=False, ngram='uni', feat_imp=False):
     """ Re-train a model on combined train and validation sets, and then make predictions on the unseen test set.
     
     Args:
         classifier (str): Name of classifier to be used in model.
         resampler (str, optional): Name of resampler to be used in model. Defaults to None.
         count (bool, optional): Set whether the vectorizer uses count (True) or TF-IDF (False). Defaults to False.
-    
+        ngram (str, optional): Set whether the vectorizer uses unigrams ('uni') or unigrams and bigrams ('unibi'). Defaults to 'uni'. 
+        feat_imp (bool, optional): Set whether feature importance is printed (True) or not (False). Defaults to False. Note that this script was written for the Naive Bayes classifier - can throw errors with different classifiers.
+
     Returns:
         test_metrics (tuple): Named tuple 'metrics', with fields 'f1_list', 'precision_list', 'recall_list', and 'accuracy_list'
             containing classification metrics by each fold.
         y_pred (array): Model's predictions made on unseen test set.
     """
     if count == True:
-        vectorizer = vect
-    else:
-        vectorizer = t_vect
+        if ngram == 'uni':
+            vectorizer = vect
+        elif ngram == 'unibi':
+            vectorizer = vect_unibi
+    elif count == False:
+        if ngram == 'uni': 
+            vectorizer = t_vect
+        elif ngram == 'unibi':
+            vectorizer = t_vect_unibi
         
     print('Classifier:', classifier, '/', 'Resampler:', resampler, '/', 'Vectorizer:', vectorizer)
 
-    model = make_pipeline(vectorizer, resampler, classifier)
+    model = Pipeline(
+        [
+            ("vectorizer", vectorizer),
+            ("resampler", resampler),
+            ("classifier", classifier)
+        ]
+    )
 
     model.fit(X_train_val, y_train_val)
     y_pred = model.predict(X_test)
@@ -682,32 +682,51 @@ def pred_test_model_labelled(classifier, resampler=None, count=False):
     print(classification_report(y_test, y_pred))
     print(pd.crosstab(y_test, y_pred, rownames=['human_labelled'], colnames=['model_predicted'], margins=True))
     
+    if feat_imp == True:
+        if count == True:
+            if ngram == 'uni':
+                feature_names = vect.get_feature_names()
+            elif ngram == 'unibi':
+                feature_names = vect_unibi.get_feature_names()
+        elif count == False:
+            if ngram == 'uni': 
+                feature_names = t_vect.get_feature_names()
+            elif ngram == 'unibi':
+                feature_names = t_vect_unibi.get_feature_names()
+
+        coefs_feature_names = sorted(zip(model.named_steps["classifier"].coef_[0], feature_names)) # get coefficients for each feature
+        top = zip(coefs_feature_names[:10], coefs_feature_names[:-(10+1):-1]) # get top 10 features and their coefficients for both classes
+        coefs_feature_names_df = pd.DataFrame(coefs_feature_names) # convert to dataframe
+        output_name = 'coefs_feature_names_test_df' # set output name
+        file_name = str('output/' + output_name + '_' + date_string + '.csv') # add datestring and set to write in output folder
+        coefs_feature_names_df.to_csv(file_name, index=False) # write to CSV
+        print ('\ntop valid:\t\ttop invalid:') # print top features for both classes
+        for (coef_1, feature_name_1), (coef_2, feature_name_2) in top:
+            print (('%.4f\t%-15s\t%.4f\t%-15s') % (coef_1, feature_name_1, coef_2, feature_name_2))
+    else:
+        pass
+
     test_metrics = namedtuple('test_metrics', ['macro_f1', 'mcc', 'macro_precision', 'macro_recall'])
     return test_metrics(macro_f1, mcc, macro_precision, macro_recall), y_pred
-
 
 # %%
 ### re-train model on full train and validation set, then make predictions on test set of labelled data
 ### arguments supplied here (classifier, resampler) should be chosen based on your cross-validation and final evaluation results above
-pred_test_model = pred_test_model_labelled(nb, svmsm, count=True)
-
+pred_test_model = pred_test_model_labelled(nb, svmsm, count=True, feat_imp=True)
 
 # %%
 ### add model's predictions as new column to dataframe of test set with document IDs and processed texts
 X_test_df['model_predicted'] = pred_test_model[1]
 X_test_df
 
-
 # %%
 ### merge in original data linked to each document (e.g., human labels, raw texts)
 test_df = pd.merge(X_test_df, labelled_data, how='outer', on=['doc_id', 'processed_text'])
 test_df
 
-
 # %%
 ### get a random sample of cases in the test set based on whether the model predicted them to be valid (0) or invalid (1)
 test_df.groupby('model_predicted').apply(lambda x: x.sample(n=10, random_state=317))
-
 
 # %%
 ### write data for labelled subset (including predictions on test set) to CSV in output folder
@@ -727,41 +746,77 @@ y_labelled = labelled_data['human_labelled']
 X_unlabelled = unlabelled_data['processed_text']
 unlabelled_doc_id = unlabelled_data['doc_id']
 
-
 # %%
-def pred_model_unlabelled(classifier, resampler=None, count=False):
+def pred_model_unlabelled(classifier, resampler=None, count=False, ngram='uni', feat_imp=False):
     """ Re-train a model on the labelled subset (i.e., combined train, validation, and test sets), and then make predictions on the unlabelled subset.
     
     Args:
         classifier (str): Name of classifier to be used in model.
         resampler (str, optional): Name of resampler to be used in model. Defaults to None.
         count (bool, optional): Set whether the vectorizer uses count (True) or TF-IDF (False). Defaults to False.
-    
+        ngram (str, optional): Set whether the vectorizer uses unigrams ('uni') or unigrams and bigrams ('unibi'). Defaults to 'uni'. 
+        feat_imp (bool, optional): Set whether feature importance is printed (True) or not (False). Defaults to False. Note that this script was written for the Naive Bayes classifier - can throw errors with different classifiers.
+
     Returns:
         y_pred_df (dataframe): Dataframe of model's predictions on unlabelled subset and document IDs.
     """
     if count == True:
-        vectorizer = vect
-    else:
-        vectorizer = t_vect
+        if ngram == 'uni':
+            vectorizer = vect
+        elif ngram == 'unibi':
+            vectorizer = vect_unibi
+    elif count == False:
+        if ngram == 'uni': 
+            vectorizer = t_vect
+        elif ngram == 'unibi':
+            vectorizer = t_vect_unibi
 
     print('Classifier:', classifier, '/', 'Resampler:', resampler, '/', 'Vectorizer:', vectorizer)
 
-    model = make_pipeline(vectorizer, resampler, classifier)
+    model = Pipeline(
+        [
+            ("vectorizer", vectorizer),
+            ("resampler", resampler),
+            ("classifier", classifier)
+        ]
+    )
 
     model.fit(X_labelled, y_labelled)
     y_pred = model.predict(X_unlabelled)
 
     y_pred_df = pd.DataFrame(y_pred, unlabelled_doc_id, columns=['model_predicted'])
     print(y_pred_df)
-    return y_pred_df
 
+    if feat_imp == True:
+        if count == True:
+            if ngram == 'uni':
+                feature_names = vect.get_feature_names()
+            elif ngram == 'unibi':
+                feature_names = vect_unibi.get_feature_names()
+        elif count == False:
+            if ngram == 'uni': 
+                feature_names = t_vect.get_feature_names()
+            elif ngram == 'unibi':
+                feature_names = t_vect_unibi.get_feature_names()
+
+        coefs_feature_names = sorted(zip(model.named_steps["classifier"].coef_[0], feature_names)) # get coefficients for each feature
+        top = zip(coefs_feature_names[:10], coefs_feature_names[:-(10+1):-1]) # get top 10 features and their coefficients for both classes
+        coefs_feature_names_df = pd.DataFrame(coefs_feature_names) # convert to dataframe
+        output_name = 'coefs_feature_names_unlabelled_df' # set output name
+        file_name = str('output/' + output_name + '_' + date_string + '.csv') # add datestring and set to write in output folder
+        coefs_feature_names_df.to_csv(file_name, index=False) # write to CSV
+        print ('\ntop valid:\t\ttop invalid:') # print top features for both classes
+        for (coef_1, feature_name_1), (coef_2, feature_name_2) in top:
+            print (('%.4f\t%-15s\t%.4f\t%-15s') % (coef_1, feature_name_1, coef_2, feature_name_2))
+    else:
+        pass
+
+    return y_pred_df
 
 # %%
 ### re-train model on full labelled subset (train, validation, and test set), then make predictions on unlabelled data
 ### arguments supplied here (classifier, resampler) should be chosen based on cross-validation and final evaluation results above
-unlabelled_model = pred_model_unlabelled(nb, svmsm, count=True)
-
+unlabelled_model = pred_model_unlabelled(nb, svmsm, count=True, feat_imp=True)
 
 # %%
 ### count how many valid (0) and invalid (1) cases were predicted to be in the unlabelled subset by the model
@@ -774,11 +829,9 @@ print("Predicted invalid cases: " f"{(len(unlabelled_model[(unlabelled_model['mo
 unlabelled_predictions_df = pd.merge(unlabelled_data, unlabelled_model, how='outer', on=['doc_id'])
 unlabelled_predictions_df
 
-
 # %%
 ### get a random sample of cases in the test set based on whether the model predicted them to be valid (0) or invalid (1)
-unlabelled_predictions_df.groupby('model_predicted').apply(lambda x: x.sample(n=10, random_state=317))
-
+unlabelled_predictions_df.groupby('model_predicted').apply(lambda x: x.sample(n=6, random_state=317))
 
 # %%
 ### write data for unlabelled subset (including predictions on unlabelled subset) to CSV in output folder
