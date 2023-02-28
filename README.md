@@ -4,6 +4,10 @@ InvalidTextDetect is a Python script for detecting invalid text responses to ope
 
 In brief, this a supervised machine learning approach that (a) trains, validates, and tests on a subset of texts manually coded as valid or invalid, (b) calculates performance metrics to help select the best model, and (c) predicts whether uncoded texts are valid or invalid based on the text alone. 
 
+Published in:
+
+Yeung, R. C., & Fernandes, M. A. (2022). Machine learning to detect invalid text responses: Validation and comparison to existing detection methods. *Behavior Research Methods*, *54*, 3055–3070. [https://doi.org/10.3758/s13428-022-01801-y](https://doi.org/10.3758/s13428-022-01801-y)
+
 ## **Gettting Started**
 
 [Fork](https://docs.github.com/en/get-started/quickstart/fork-a-repo) and [clone](https://docs.github.com/en/get-started/quickstart/fork-a-repo#cloning-your-forked-repository) this repository to get a copy of this project locally on your machine.
